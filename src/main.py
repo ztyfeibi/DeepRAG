@@ -5,6 +5,7 @@ from textwrap import indent
 from tqdm import tqdm
 from copy import copy
 import logging
+import time
 import torch
 from data import ASQA, WikiMultiHopQA, HotpotQA, IIRC, FreshQA
 from generate import *
@@ -92,16 +93,24 @@ def process_data_ray(args, data_indices, data_dict, process_idx):
     outputs = []
     output_file_path = os.path.join(args.output_dir, f"output_subprocess_{process_idx}.jsonl")
     all_results = None
-    with open(output_file_path, "a+") as output_file:
+    with open(output_file_path, "a+", encoding="utf-8") as output_file:
         for i in tqdm(range(len(data_subset)), desc=f"Process {process_idx}"):
             last_counter = copy(model.counter)
             batch = data_subset[i]
-            if args.method == "answer-aware":
-                pred = model.inference(batch["question"], batch["demo"], batch["case"], batch["answer"])
-            elif args.method == "srag-sample" or args.method == "srag-sample-allretrieve" or args.method == "sample-dpo" or args.method == "srag-sample-all":
-                pred, all_results = model.inference(**batch)
-            else:
-                pred = model.inference(batch["question"], batch["demo"], batch["case"])
+            # 统计端到端延迟：从调用 model.inference 开始到返回预测结果为止
+            latency_sec = None
+            t_start = time.perf_counter()
+            try:
+                if args.method == "answer-aware":
+                    pred = model.inference(batch["question"], batch["demo"], batch["case"], batch["answer"])
+                elif args.method == "srag-sample" or args.method == "srag-sample-allretrieve" or args.method == "sample-dpo" or args.method == "srag-sample-all":
+                    pred, all_results = model.inference(**batch)
+                else:
+                    pred = model.inference(batch["question"], batch["demo"], batch["case"])
+            except Exception:
+                # 推理异常时不生成错误的延迟数据，保持原有异常向上传播的行为
+                raise
+            latency_sec = time.perf_counter() - t_start
             if isinstance(pred, str):
                 pred = pred.strip()
 
@@ -112,6 +121,7 @@ def process_data_ray(args, data_indices, data_dict, process_idx):
                 "answer": batch["answer"],
                 "qa_pairs": batch.get("qa_pairs",[]),
                 "all_results": all_results,
+                "latency_sec": latency_sec,
             }
             if args.use_counter:
                 ret.update(model.counter.calc(last_counter))
@@ -153,11 +163,11 @@ def main():
         )
         models = client.models.list()
         model = models.data[0].id
-        with open(args.output_dir+'/model_id.txt','w') as f:
+        with open(args.output_dir+'/model_id.txt','w', encoding="utf-8") as f:
                 f.write(model)
             
     # Save config  m  
-    with open(os.path.join(args.output_dir, "config.json"), "w") as f:
+    with open(os.path.join(args.output_dir, "config.json"), "w", encoding="utf-8") as f:
         json.dump(args.__dict__, f, indent=4)
 
     # Load data
@@ -211,7 +221,7 @@ def main():
     if args.resume:
         for file in os.listdir(args.output_dir):
             if file.startswith("output_subprocess_"):
-                with open(os.path.join(args.output_dir, file), "r") as f:
+                with open(os.path.join(args.output_dir, file), "r", encoding="utf-8") as f:
                     for line in f:
                         ret = json.loads(line)
                         already_processed_id.add(ret["qid"])
@@ -253,7 +263,7 @@ def main():
     # Sort outputs if order is important (e.g., by 'qid' or original data order)
     # merged_outputs.sort(key=lambda x: x['qid'])
 
-    with open(os.path.join(args.output_dir, "output.jsonl"), "w") as outfile:
+    with open(os.path.join(args.output_dir, "output.jsonl"), "w", encoding="utf-8") as outfile:
         for ret in merged_outputs:
             outfile.write(json.dumps(ret, ensure_ascii=False) + "\n")
 

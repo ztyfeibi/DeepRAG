@@ -139,7 +139,8 @@ class SRAGSFTV2(BasicRAG):
                 max_length=self.generate_max_length,
                 stop_words=["<|im_end|>", "<|eot_id|>", "Intermediate answer:", "So the final", "Let"]
             )
-            
+            if self.use_counter:
+                self.counter.add_generate(follow_up, self.follow_up_generator.tokenizer)
             if follow_up.strip() == "":
                 continue
             
@@ -163,6 +164,8 @@ class SRAGSFTV2(BasicRAG):
             max_length=self.generate_max_length,
             stop_words=["<|im_end|>", "<|eot_id|>", "Follow up:", "So the final answer"]
         )
+        if self.use_counter:
+            self.counter.add_generate(answer, self.generator.tokenizer)
         # print("INTERMEDIATE ANSWER",answer)
 
         return self._clean_generated_text(answer)
@@ -179,6 +182,8 @@ class SRAGSFTV2(BasicRAG):
             max_length=self.generate_max_length,
             stop_words=["<|im_end|>", "<|eot_id|>", "Follow up:"]
         )
+        if self.use_counter:
+            self.counter.add_generate(final_answer, self.generator.tokenizer)
         if not final_answer.startswith("<answer long>"):
             final_answer = "<answer long>" + final_answer
         # print("FINAL ANSWER",final_answer)
@@ -201,6 +206,8 @@ class SRAGSFTV2(BasicRAG):
             max_length=self.generate_max_length,
             stop_words=["<|im_end|>", "<|eot_id|>", "Follow up:", "So the final answer"]
         )
+        if self.use_counter:
+            self.counter.add_generate(answer, self.follow_up_generator.tokenizer)
 
         return self._clean_generated_text(answer), conversation_history
     

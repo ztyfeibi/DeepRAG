@@ -19,7 +19,7 @@ def get_args():
     parser.add_argument("--dir", type=str, required=True)
     parser.add_argument("--remote_url", type=str, default=None)
     tmp = parser.parse_args()
-    with open(os.path.join(tmp.dir, "config.json"), "r") as f:
+    with open(os.path.join(tmp.dir, "config.json"), "r", encoding="utf-8") as f:
         args = json.load(f)
     args = argparse.Namespace(**args)
     args.output_dir = tmp.dir
@@ -131,6 +131,42 @@ def regenerate_remote_answer(cot, tokenizer, model, case, demo):
     return text
 
 
+def _as_float(v):
+    """安全地把值转换为 float；None 或非法值返回 None。"""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_int(v):
+    """安全地把值转换为 int；None 或非法值返回 0。"""
+    if v is None:
+        return 0
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_mean(vals):
+    """忽略 None 计算均值；全部为空时返回 None（避免除零）。"""
+    vals = [v for v in vals if v is not None]
+    if not vals:
+        return None
+    return float(np.mean(vals))
+
+
+def _safe_percentile(vals, q):
+    """忽略 None 计算分位数；全部为空时返回 None。"""
+    vals = [v for v in vals if v is not None]
+    if not vals:
+        return None
+    return float(np.percentile(vals, q))
+
+
 def main():
     args = get_args()
     logger.info(f"{args}")
@@ -156,13 +192,14 @@ def main():
             t["case"] if "case" in t else None
         ]
 
-    metrics = ["EM", "F1", "Precision", "Recall"]
-    if "use_counter" not in args or args.use_counter:
-        count_list = ["retrieve_count", "generate_count", "hallucinated_count", "token_count", "sentence_count"]
-        metrics += count_list
-    value = [[] for _ in range(len(metrics))]
-    with open(os.path.join(args.output_dir, "output.jsonl"), "r") as fin:
+    with open(os.path.join(args.output_dir, "output.jsonl"), "r", encoding="utf-8") as fin:
         lines = fin.readlines()
+    
+    # 逐样本收集指标
+    ems, f1s, precs, recalls = [], [], [], []
+    retrieve_counts, generate_counts = [], []
+    hallucinated_counts, token_counts, sentence_counts = [], [], []
+    latencies = []
     
     need_generate = args.dataset in ['2wikimultihopqa', "hotpotqa", "iirc", "strategyqa"] 
     if args.method == "baseline-sft":
@@ -184,13 +221,15 @@ def main():
             # model_name = model.models.list().data[0].id
 
         demo = data.dataset[0]["demo"]
-    pred_out = open(f"{args.output_dir}/details.txt", "w")
+    pred_out = open(f"{args.output_dir}/details.txt", "w", encoding="utf-8")
     
     for line in tqdm(lines):
         rd = json.loads(line)
         qid = rd["qid"]
         pred = rd["prediction"]
-        rd["retrieve_count"] = sum([1 for p in pred if isinstance(p, dict) and "docs" in p]) if pred is not None else 0
+        # 修复：仅当记录中不存在 retrieve_count 字段时，才根据包含 docs 的轨迹节点回退计算
+        if "retrieve_count" not in rd:
+            rd["retrieve_count"] = sum([1 for p in pred if isinstance(p, dict) and "docs" in p]) if pred is not None else 0
         if pred is None:
             pred = ""
         if isinstance(pred, list):
@@ -235,13 +274,17 @@ def main():
             ground_truth, 
             ground_truth_id
         )
-        value[0].append(em_ret["correct"])
-        for i, k in enumerate(f1_ret.keys()):
-            value[i+1].append(f1_ret[k])
+        ems.append(em_ret["correct"])
+        f1s.append(f1_ret["f1"])
+        precs.append(f1_ret["precision"])
+        recalls.append(f1_ret["recall"])
 
-        if "use_counter" not in args or args.use_counter:
-            for i, k in enumerate(count_list):
-                value[i+4].append(rd[k])
+        retrieve_counts.append(_as_int(rd.get("retrieve_count")))
+        generate_counts.append(_as_int(rd.get("generate_count")))
+        hallucinated_counts.append(_as_int(rd.get("hallucinated_count")))
+        token_counts.append(_as_int(rd.get("token_count")))
+        sentence_counts.append(_as_int(rd.get("sentence_count")))
+        latencies.append(_as_float(rd.get("latency_sec")))
         detail = {
             "qid": qid, 
             "final_pred": pred,
@@ -249,19 +292,97 @@ def main():
             "F1": str(f1_ret["f1"]) 
         }
         pred_out.write(json.dumps(detail)+"\n")
+    pred_out.close()
 
-    ret = []
-    for i, metric in enumerate(metrics):
-        val = np.array(value[i])
-        ret.append([metric, val.mean()])
-    # 按em=0和em=retrieve_count
-    em_0 = np.array(value[4])[np.array(value[0]) == 0]
-    em_1 = np.array(value[4])[np.array(value[0]) == 1]
-    # print(em_1)
-    print(f"em=0: {em_0.mean()}, em=1: {em_1.mean()}")
-    df = pd.DataFrame(ret)
+    num_samples = len(ems)
+    
+    # 汇总指标
+    em_mean = _safe_mean(ems)
+    f1_mean = _safe_mean(f1s)
+    prec_mean = _safe_mean(precs)
+    recall_mean = _safe_mean(recalls)
+    avg_retrieve = _safe_mean(retrieve_counts)
+    avg_generate = _safe_mean(generate_counts)
+    avg_hallucinated = _safe_mean(hallucinated_counts)
+    avg_tokens = _safe_mean(token_counts)
+    avg_sentence = _safe_mean(sentence_counts)
+    
+    # 检索率：retrieve_count > 0 与 == 0 的样本比例
+    if num_samples > 0:
+        retrieval_rate = float(sum(1 for c in retrieve_counts if c > 0)) / num_samples
+        zero_retrieval_rate = float(sum(1 for c in retrieve_counts if c == 0)) / num_samples
+    else:
+        retrieval_rate = None
+        zero_retrieval_rate = None
+    
+    # 延迟相关：旧文件缺 latency 时写 null，不能报错
+    valid_latencies = [l for l in latencies if l is not None]
+    avg_latency = _safe_mean(valid_latencies)
+    p50_latency = _safe_percentile(valid_latencies, 50)
+    p95_latency = _safe_percentile(valid_latencies, 95)
+    
+    # 逻辑吞吐量 = 有效样本数 / 所有样本 latency 之和
+    total_latency = sum(valid_latencies)
+    if total_latency and total_latency > 0:
+        throughput_qps = float(len(valid_latencies)) / total_latency
+    else:
+        throughput_qps = None
+    
+    # result.tsv（保留原有两列格式：指标名 + 均值）
+    rows = [
+        ["EM", em_mean],
+        ["F1", f1_mean],
+        ["Precision", prec_mean],
+        ["Recall", recall_mean],
+        ["retrieve_count", avg_retrieve],
+        ["generate_count", avg_generate],
+        ["hallucinated_count", avg_hallucinated],
+        ["token_count", avg_tokens],
+        ["sentence_count", avg_sentence],
+        ["avg_retrieve_count", avg_retrieve],
+        ["retrieval_rate", retrieval_rate],
+        ["zero_retrieval_rate", zero_retrieval_rate],
+        ["avg_latency_sec", avg_latency],
+        ["p50_latency_sec", p50_latency],
+        ["p95_latency_sec", p95_latency],
+        ["avg_generate_count", avg_generate],
+        ["avg_output_tokens", avg_tokens],
+        ["throughput_qps", throughput_qps],
+    ]
+    df = pd.DataFrame(rows)
     print(df)
-    df.to_csv(f"{args.output_dir}/result.tsv", index=False, header=False)
+    df.to_csv(f"{args.output_dir}/result.tsv", index=False, header=False, encoding="utf-8")
+    
+    # 按 em=0 / em=1 观察检索次数（调试信息）
+    if num_samples > 0:
+        ems_arr = np.array(ems)
+        retr_arr = np.array(retrieve_counts)
+        em_0 = retr_arr[ems_arr == 0]
+        em_1 = retr_arr[ems_arr == 1]
+        if len(em_0) > 0 and len(em_1) > 0:
+            print(f"em=0: {em_0.mean()}, em=1: {em_1.mean()}")
+    
+    # metrics.json（使用数值类型，缺失时写 null）
+    metrics = {
+        "num_samples": num_samples,
+        "EM": em_mean,
+        "F1": f1_mean,
+        "Precision": prec_mean,
+        "Recall": recall_mean,
+        "avg_retrieve_count": avg_retrieve,
+        "retrieval_rate": retrieval_rate,
+        "zero_retrieval_rate": zero_retrieval_rate,
+        "avg_latency_sec": avg_latency,
+        "p50_latency_sec": p50_latency,
+        "p95_latency_sec": p95_latency,
+        "avg_generate_count": avg_generate,
+        "avg_output_tokens": avg_tokens,
+        "throughput_qps": throughput_qps,
+        "avg_sentence_count": avg_sentence,
+        "avg_hallucinated_count": avg_hallucinated,
+    }
+    with open(f"{args.output_dir}/metrics.json", "w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":
