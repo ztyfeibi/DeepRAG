@@ -32,12 +32,15 @@ class SRAGSFTV2(BasicRAG):
         self.found_answer = False
         self.final_answer = None
         self.follow_up_generator = self.generator
+        self.project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         
     def inference(self, question, demo, case, golden_answer=None):
         # print(f"golden_answer: {golden_answer}")
         self.found_answer = False
         self.final_answer = None
-        icl = open("ICL-prompt/instruction.txt").read()
+        instruction_path = os.path.join(self.project_root, "ICL-prompt", "instruction.txt")
+        with open(instruction_path, encoding="utf-8") as f:
+            icl = f.read()
         self.base_prompt = icl + 'Question: ' + question
         
         return self._bfs_reasoning(question, golden_answer)

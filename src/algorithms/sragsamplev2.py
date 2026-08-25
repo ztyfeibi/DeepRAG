@@ -40,7 +40,10 @@ class SRAGSampleV2(BasicRAG):
         self.found_answer = False
         self.final_answer = None
         self.follow_up_generator = BasicGenerator(model_name_or_path=self.model_name_or_path, vllm=self.vllm, remote_url=self.follow_up_remote_url)
-        self.retrieve_template = open("ICL-prompt/intermediate_answer.txt").read()
+        self.project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        retrieve_template_path = os.path.join(self.project_root, 'ICL-prompt', 'intermediate_answer.txt')
+        with open(retrieve_template_path, encoding='utf-8') as f:
+            self.retrieve_template = f.read()
         
     def inference(self, question, **kwargs):
         """
@@ -55,7 +58,9 @@ class SRAGSampleV2(BasicRAG):
         # print(f"golden_answer: {golden_answer}")
         self.found_answer = False
         self.final_answer = None
-        icl = open(f"ICL-prompt/{self.dataset}/question_decompose.txt").read()
+        decompose_path = os.path.join(self.project_root, 'ICL-prompt', self.dataset, 'question_decompose.txt')
+        with open(decompose_path, encoding='utf-8') as f:
+            icl = f.read()
             
         self.base_prompt = icl + 'Question: ' + question
         self.question = question

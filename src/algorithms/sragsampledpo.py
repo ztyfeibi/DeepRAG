@@ -42,7 +42,9 @@ class SRAGSampleDPO(SRAGSampleV2):
         self.final_answer = None
         
         golden_answer = kwargs.get('answer')
-        icl = open("ICL-prompt/instruction.txt").read()
+        instruction_path = os.path.join(self.project_root, 'ICL-prompt', 'instruction.txt')
+        with open(instruction_path, encoding='utf-8') as f:
+            icl = f.read()
         self.base_prompt = icl + 'Question: ' + question
         
         return self._bfs_reasoning(question, golden_answer)

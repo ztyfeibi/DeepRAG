@@ -62,7 +62,10 @@ class BasicGenerator:
                 #     if "lora" in model.id:
                 #         self.model = model.id
                 print("model id: ", self.model)
-                self.tokenizer = AutoTokenizer.from_pretrained(self.model)
+                # Keep using the caller-provided tokenizer path. Some remote
+                # servers expose a model id that is not a local path or a valid
+                # Hugging Face repo id on this machine.
+                self.tokenizer = AutoTokenizer.from_pretrained(self.model_name_or_path)
             else:
                 self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
         elif self.vllm:
@@ -551,4 +554,5 @@ class BaselineSFTRAG(BasicRAG):
         if self.use_counter:
             self.counter.add_generate(text, self.generator.tokenizer)
         return text
+
 

@@ -1,4 +1,4 @@
-from typing import List, Dict, Tuple
+﻿from typing import List, Dict, Tuple
 import os
 import time
 import tqdm
@@ -13,6 +13,16 @@ from beir.datasets.data_loader import GenericDataLoader
 from beir.retrieval.evaluation import EvaluateRetrieval
 from beir.retrieval.search.lexical import BM25Search
 from beir.retrieval.search.lexical.elastic_search import ElasticSearch
+
+def _bm25search_encode_stub(self, corpus, queries, encode_output_path='./embeddings/', overwrite=False, query_filename='queries.pkl', corpus_filename='corpus.*.pkl', **kwargs):
+    raise NotImplementedError('DeepRAG only uses BM25 online search; BEIR encode() is not used here.')
+
+def _bm25search_search_from_files_stub(self, query_embeddings_file, corpus_embeddings_files, top_k, **kwargs):
+    raise NotImplementedError('DeepRAG only uses BM25 online search; BEIR search_from_files() is not used here.')
+
+BM25Search.encode = _bm25search_encode_stub
+BM25Search.search_from_files = _bm25search_search_from_files_stub
+BM25Search.__abstractmethods__ = frozenset()
 
 logging.basicConfig(level=logging.INFO) 
 logger = logging.getLogger(__name__)

@@ -1,0 +1,31 @@
+{
+    "num_processes": 1,
+    "gpus_per_process": 1,
+    "remote_url": [
+        "http://10.65.1.110:8005/v1"
+    ],
+    "output_dir": "..\\results\\acceptance_hotpotqa_rerun2\\0",
+    "dataset": "hotpotqa",
+    "data_path": "..\\data\\hotpotqa",
+    "split": "dev",
+    "temperature": 0.0,
+    "sample": 1,
+    "generate_max_length": 256,
+    "fewshot": 8,
+    "resume": false,
+    "model_name_or_path": "..\\hf_models",
+    "method": "srag-sftv2",
+    "es_index_name": "wiki",
+    "retriever": "BM25",
+    "retrieve_topk": 3,
+    "shuffle": false,
+    "vllm": false,
+    "follow_up_remote_url": [
+        "http://10.65.1.110:8005/v1"
+    ],
+    "hallucination_threshold": 0.1,
+    "sentence_solver": "avg",
+    "query_formulation": "direct",
+    "check_real_words": false,
+    "use_counter": true
+}

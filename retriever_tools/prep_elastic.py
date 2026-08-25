@@ -5,6 +5,7 @@ import time
 import csv
 import json
 import logging
+import os
 from tqdm import tqdm
 from beir.datasets.data_loader import GenericDataLoader
 
@@ -16,7 +17,7 @@ def build_elasticsearch(
     print(f'#files {len(beir_corpus_files)}')
     from beir.retrieval.search.lexical.elastic_search import ElasticSearch
     config = {
-        'hostname': '30.246.243.217',
+        'hostname': os.getenv('ES_HOST', 'localhost'),
         'index_name': index_name,
         'keys': {'title': 'title', 'body': 'txt'},
         'timeout': 100,
@@ -36,7 +37,7 @@ def build_elasticsearch(
     # generator
     def generate_actions():
         for beir_corpus_file in beir_corpus_files:
-            with open(beir_corpus_file, 'r') as fin:
+            with open(beir_corpus_file, 'r', encoding='utf-8') as fin:
                 reader = csv.reader(fin, delimiter='\t')
                 header = next(reader)  # skip header
                 for row in reader:
