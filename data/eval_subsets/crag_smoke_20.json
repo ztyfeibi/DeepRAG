@@ -1,0 +1,31 @@
+{
+  "dataset_path": "data/crag",
+  "split": "test_with_id",
+  "source_file": "data/crag/test_with_id.jsonl",
+  "source_sha256": "C28145E9FFEB7B55F8743FA4CDD0265CA148610A0E1E5B6F1C6CD8FF653A899C",
+  "selection_rule": "first 20 non-empty JSONL records in source-file order; original_position is zero-based",
+  "count": 20,
+  "generated_at_utc": "2026-08-29T13:01:26.2805447Z",
+  "items": [
+    {"id": "7bb29eb4-12f9-45f9-bf8a-66832b3c8962", "original_position": 0, "question": "how many 3-point attempts did steve nash average per game in seasons he made the 50-40-90 club?"},
+    {"id": "a2486535-98e7-4876-9880-80374eac2fa8", "original_position": 1, "question": "what is a movie to feature a person who can create and control a device that can manipulate the laws of physics?"},
+    {"id": "161a89f3-7a70-4e12-a1a2-7832e098b0a7", "original_position": 2, "question": "where did the ceo of salesforce previously work?"},
+    {"id": "30395ec2-4247-4a23-8003-37dcfdf1531c", "original_position": 3, "question": "which movie won the oscar best visual effects in 2021?"},
+    {"id": "55b219e5-ba31-4318-a73d-551f0fb9c546", "original_position": 4, "question": "what company in the dow jones is the best performer today?"},
+    {"id": "8163a6f0-3238-4a69-ba60-a4a06090bc6f", "original_position": 5, "question": "in 2004, which animated film was recognized with the best animated feature film oscar?"},
+    {"id": "31f7aaad-f732-45b9-8cf8-5563974ba2ac", "original_position": 6, "question": "on which date did sgml distribute dividends the first time"},
+    {"id": "06511362-0742-4608-8fdf-d192d0d53743", "original_position": 7, "question": "what is the average gross for the top 3 pixar movies?"},
+    {"id": "99150c8b-556e-4800-b9e6-d33e6b5adfa5", "original_position": 8, "question": "what are the countries that are located in southern africa."},
+    {"id": "ddfc9471-4496-4fef-bf05-994233fa4340", "original_position": 9, "question": "which company in the s&p 500 index has the highest percentage of green energy usage?"},
+    {"id": "74ec83d9-0ebc-4f5e-b738-7cffbf262e74", "original_position": 10, "question": "what's the cooling source of the koeberg nuclear power station?"},
+    {"id": "9864fff2-af82-495c-ab18-a6c589635d29", "original_position": 11, "question": "when did hamburg become the biggest city of germany?"},
+    {"id": "aa838149-4446-4917-be80-945afe5287f8", "original_position": 12, "question": "how much did voyager therapeutics's stock rise in value over the past month?"},
+    {"id": "3569f7c6-3198-40e8-a3e4-45599e23c4f8", "original_position": 13, "question": "what was the total value of all corporate bond issuances in 2024 for the first week?"},
+    {"id": "2d4079bd-fb87-4b89-8119-be2c2fecda16", "original_position": 14, "question": "what is the ex-dividend date of microsoft in the 1st qtr of 2024"},
+    {"id": "642bbc21-ed9d-42e7-8455-382a6f2b0f08", "original_position": 15, "question": "which player took home grand slam championship in 2017?"},
+    {"id": "3c2e454d-10a1-40eb-9534-f9440ecc4c3b", "original_position": 16, "question": "what is the most active volcano in the philippines?"},
+    {"id": "9263d16c-88a7-408c-9679-56afbe542fa4", "original_position": 17, "question": "what were 3 of the most watched halloween movies of all time?"},
+    {"id": "a4cb51da-26e1-446d-80fa-8833e71db86e", "original_position": 18, "question": "which player has the most career wins in the nfl among quarterbacks who have never been to a super bowl?"},
+    {"id": "7752219e-72eb-44c7-bf83-a52a00c7b5da", "original_position": 19, "question": "how many number one hit songs does lady gaga have?"}
+  ]
+}

@@ -10,7 +10,7 @@ from sympy import Basic
 import torch
 from math import exp
 from scipy.special import softmax
-from retriever import BM25, DPR, SGPT, GTR
+from retriever import BM25, DPR, SGPT, GTR, HyperGraphHTTPRetriever
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from vllm import LLM, SamplingParams
 nlp = spacy.load("en_core_web_sm")
@@ -276,6 +276,7 @@ class Counter:
         self.hallucinated = 0
         self.token = 0
         self.sentence = 0
+        self.retrieval_latency_sec = 0.0
 
     def add_generate(self, text, tokenizer):
         self.generate += 1
@@ -293,7 +294,8 @@ class Counter:
             "generate_count": self.generate - other_counter.generate,
             "hallucinated_count": self.hallucinated - other_counter.hallucinated, 
             "token_count": self.token - other_counter.token, 
-            "sentence_count": self.sentence - other_counter.sentence 
+            "sentence_count": self.sentence - other_counter.sentence,
+            "retrieval_latency_sec": self.retrieval_latency_sec - other_counter.retrieval_latency_sec,
         }
          
 
@@ -323,35 +325,110 @@ class BasicRAG:
                 # self.retriever = None
             elif self.retriever_type == "GTR":
                 self.retriever = GTR()
+            elif self.retriever_type == "HyperGraph":
+                self.retriever = HyperGraphHTTPRetriever(
+                    endpoint=self.hypergraph_url,
+                    timeout=self.hypergraph_timeout,
+                    topk=self.hypergraph_topk,
+                    max_token_for_text_unit=self.hypergraph_max_text_tokens,
+                    max_token_for_local_context=self.hypergraph_max_local_tokens,
+                    max_token_for_global_context=self.hypergraph_max_global_tokens,
+                )
             else:
                 self.retriever = None
                 # raise NotImplementedError
         
         self.counter = Counter()
+        self.retrieval_events = []
+
+    def reset_retrieval_events(self):
+        """Start a fresh per-question retrieval event sequence."""
+        self.retrieval_events = []
+
+    def _context_blocks_for_event(self, docs):
+        if docs is None:
+            return []
+        if isinstance(docs, str):
+            values = [docs]
+        else:
+            try:
+                values = list(docs)
+            except TypeError:
+                values = [docs]
+        source = "hypergraph" if self.retriever_type == "HyperGraph" else self.retriever_type.lower()
+        return [
+            {"source": source, "rank": rank, "text": str(value)}
+            for rank, value in enumerate(values, start=1)
+        ]
+
+    def _new_retrieval_event(self, query):
+        return {
+            "step": len(self.retrieval_events) + 1,
+            "query": str(query),
+            "backend": self.retriever_type,
+            "status": "success",
+            "latency_sec": 0.0,
+            "context_recorded": bool(getattr(self, "record_retrieval_context", False)),
+            "context_block_count": 0,
+            "context_char_count": 0,
+        }
 
     def retrieve(self, query, topk=1, max_query_length=64):
         self.counter.retrieve += 1
-        if self.retriever_type == "BM25":
-            _docs_ids, docs = self.retriever.retrieve(
-                queries = [query], 
-                topk = topk, 
-                max_query_length = max_query_length,
-            )
-            return docs[0]
-        elif self.retriever_type == "SGPT":
-            docs = self.retriever.retrieve(
-                queries = [query], 
-                topk = topk,
-            )
-            return docs[0] 
-        elif self.retriever_type == "DPR":
-            docs = self.retriever.retrieve(
-                queries = [query], 
-                topk = topk,
-            )
-            return docs[0] 
-        else:
-            raise NotImplementedError
+        started = time.perf_counter()
+        event = self._new_retrieval_event(query)
+        try:
+            if self.retriever_type == "BM25":
+                _docs_ids, docs = self.retriever.retrieve(
+                    queries = [query],
+                    topk = topk,
+                    max_query_length = max_query_length,
+                )
+                result = docs[0]
+            elif self.retriever_type == "HyperGraph":
+                _docs_ids, docs = self.retriever.retrieve(queries=[query])
+                result = docs[0]
+            elif self.retriever_type == "SGPT":
+                docs = self.retriever.retrieve(
+                    queries = [query],
+                    topk = topk,
+                )
+                result = docs[0]
+            elif self.retriever_type == "DPR":
+                docs = self.retriever.retrieve(
+                    queries = [query],
+                    topk = topk,
+                )
+                result = docs[0]
+            else:
+                raise NotImplementedError
+        except Exception as exc:
+            elapsed = time.perf_counter() - started
+            event.update({
+                "status": "failure",
+                "latency_sec": elapsed,
+                "context_recorded": False,
+                "error": {
+                    "type": type(exc).__name__,
+                    "message": "retrieval failed",
+                },
+            })
+            self.retrieval_events.append(event)
+            self.counter.retrieval_latency_sec += elapsed
+            raise
+
+        context_blocks = self._context_blocks_for_event(result)
+        elapsed = time.perf_counter() - started
+        event.update({
+            "latency_sec": elapsed,
+            "context_block_count": len(context_blocks),
+            "context_char_count": sum(len(block["text"]) for block in context_blocks),
+        })
+        if event["context_recorded"]:
+            event["context_blocks"] = context_blocks
+        self.retrieval_events.append(event)
+        self.counter.retrieval_latency_sec += elapsed
+        return result
     
     def get_top_sentence(self, text):
         sentences = [sent.text.strip() for sent in nlp(text).sents]

@@ -13,7 +13,11 @@ __pycache__/
 hf_models/*
 *.whl
 data/*
+!data/eval_subsets/
+data/eval_subsets/*
+!data/eval_subsets/crag_smoke_20.json
 .venv
 .venv/*
 .venv-mingw
 .venv-mingw/*
+results/*

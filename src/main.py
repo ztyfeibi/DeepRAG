@@ -21,6 +21,8 @@ def get_args():
     parser.add_argument("--split", type=str, default=None)
     parser.add_argument("--temperature", type=float, default=0.0, help="Temperature for generation")
     parser.add_argument("--sample", type=int, default=1000, help="Number of samples to generate")
+    parser.add_argument("--sample_ids_file", type=str, default=None,
+                        help="JSON subset manifest; selects samples in manifest ID order")
     parser.add_argument("--generate_max_length", type=int, default=100, help="Max length for generation")
     parser.add_argument("--fewshot", type=int, default=8, help="Number of fewshot examples")
     parser.add_argument("--resume", action="store_true", help="Resume from the last checkpoint")
@@ -29,6 +31,14 @@ def get_args():
     parser.add_argument("--es_index_name", type=str, default="wiki")
     parser.add_argument("--retriever", type=str, default="BM25")
     parser.add_argument("--retrieve_topk", type=int, default=3)
+    parser.add_argument("--hypergraph_url", type=str, default="http://127.0.0.1:8765")
+    parser.add_argument("--hypergraph_timeout", type=float, default=300)
+    parser.add_argument("--hypergraph_topk", type=int, default=10)
+    parser.add_argument("--hypergraph_max_text_tokens", type=int, default=2000)
+    parser.add_argument("--hypergraph_max_local_tokens", type=int, default=1000)
+    parser.add_argument("--hypergraph_max_global_tokens", type=int, default=1000)
+    parser.add_argument("--record_retrieval_context", action="store_true",
+                        help="Record retrieval context text in per-question retrieval events")
     parser.add_argument("--shuffle", action="store_true", help="Shuffle the data")
     parser.add_argument("--vllm", default=False, action="store_true", help="Use vLLM")
     parser.add_argument("--follow_up_remote_url", type=str,  nargs='+', default=None, help="Follow up remote url")
@@ -44,6 +54,52 @@ def setup_logging():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
     return logger
+
+
+def load_sample_ids(path):
+    """Read ordered sample IDs from a reproducible subset manifest."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Unable to read sample_ids_file {}: {}".format(path, type(exc).__name__)) from exc
+    items = manifest.get("items") if isinstance(manifest, dict) else None
+    if not isinstance(items, list) or not items:
+        raise ValueError("sample_ids_file must contain a non-empty items list")
+    sample_ids = []
+    seen_ids = set()
+    duplicate_ids = set()
+    for position, item in enumerate(items):
+        sample_id = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(sample_id, str) or not sample_id.strip():
+            raise ValueError("sample_ids_file item {} has no valid id".format(position))
+        if sample_id in seen_ids:
+            duplicate_ids.add(sample_id)
+        seen_ids.add(sample_id)
+        sample_ids.append(sample_id)
+    if duplicate_ids:
+        raise ValueError("sample_ids_file contains duplicate IDs: {}".format(", ".join(sorted(duplicate_ids))))
+    return sample_ids
+
+
+def select_samples_by_id(data, sample_ids):
+    """Select all requested IDs strictly and preserve the manifest's ordering."""
+    data_by_id = {}
+    duplicate_dataset_ids = set()
+    for record in data:
+        sample_id = record.get("qid")
+        if not isinstance(sample_id, str) or not sample_id.strip():
+            raise ValueError("Dataset contains a record with no valid qid")
+        if sample_id in data_by_id:
+            duplicate_dataset_ids.add(sample_id)
+        data_by_id[sample_id] = record
+    if duplicate_dataset_ids:
+        raise ValueError("Dataset contains duplicate qid values: {}".format(
+            ", ".join(sorted(str(sample_id) for sample_id in duplicate_dataset_ids))))
+    missing_ids = [sample_id for sample_id in sample_ids if sample_id not in data_by_id]
+    if missing_ids:
+        raise ValueError("sample_ids_file IDs missing from dataset: {}".format(", ".join(missing_ids)))
+    return [data_by_id[sample_id] for sample_id in sample_ids]
 
 def process_data_ray(args, data_indices, data_dict, process_idx):
     import os
@@ -97,6 +153,7 @@ def process_data_ray(args, data_indices, data_dict, process_idx):
         for i in tqdm(range(len(data_subset)), desc=f"Process {process_idx}"):
             last_counter = copy(model.counter)
             batch = data_subset[i]
+            model.reset_retrieval_events()
             # 统计端到端延迟：从调用 model.inference 开始到返回预测结果为止
             latency_sec = None
             t_start = time.perf_counter()
@@ -115,16 +172,24 @@ def process_data_ray(args, data_indices, data_dict, process_idx):
                 pred = pred.strip()
 
             ret = {
+                "schema_version": 2,
                 "qid": batch["qid"],
                 "question": batch["question"],
                 "prediction": pred,
                 "answer": batch["answer"],
+                "status": "success",
+                "retriever": args.retriever,
+                "retrieval_events": list(model.retrieval_events),
                 "qa_pairs": batch.get("qa_pairs",[]),
                 "all_results": all_results,
                 "latency_sec": latency_sec,
             }
             if args.use_counter:
                 ret.update(model.counter.calc(last_counter))
+                if ret["retrieve_count"] != len(ret["retrieval_events"]):
+                    raise RuntimeError(
+                        "retrieve_count does not match the number of retrieval_events"
+                    )
             outputs.append(ret)
             output_file.write(json.dumps(ret, ensure_ascii=False) + "\n")
             output_file.flush()
@@ -185,12 +250,17 @@ def main():
         raise NotImplementedError
     data_loader.format(fewshot=args.fewshot)
     data = data_loader.dataset
-    if args.shuffle:
-        data = data.shuffle(seed=42)
-    if args.sample != -1:
-        samples = min(len(data), args.sample)
-        # data = data.select(range(samples))
-        data = data[:samples]
+    if args.sample_ids_file:
+        sample_ids = load_sample_ids(args.sample_ids_file)
+        data = select_samples_by_id(data, sample_ids)
+        logger.info("Selected %d samples from %s in manifest order", len(data), args.sample_ids_file)
+    else:
+        if args.shuffle:
+            data = data.shuffle(seed=42)
+        if args.sample != -1:
+            samples = min(len(data), args.sample)
+            # data = data.select(range(samples))
+            data = data[:samples]
 
     # Convert dataset to a serializable format
     # data_dict = data.to_dict()

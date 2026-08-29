@@ -167,6 +167,37 @@ def _safe_percentile(vals, q):
     return float(np.percentile(vals, q))
 
 
+def _load_expected_sample_ids(args):
+    """Load the optional fixed sample manifest recorded in config.json."""
+    sample_ids_file = getattr(args, "sample_ids_file", None)
+    if not sample_ids_file:
+        return None
+    with open(sample_ids_file, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+    items = manifest.get("items")
+    if not isinstance(items, list):
+        raise ValueError(f"Invalid sample IDs manifest: {sample_ids_file}")
+    sample_ids = [item.get("id") for item in items if isinstance(item, dict)]
+    if len(sample_ids) != len(items) or any(not isinstance(qid, str) or not qid for qid in sample_ids):
+        raise ValueError(f"Sample IDs manifest contains an invalid ID: {sample_ids_file}")
+    if len(sample_ids) != len(set(sample_ids)):
+        raise ValueError(f"Sample IDs manifest contains duplicate IDs: {sample_ids_file}")
+    return sample_ids
+
+
+def _has_empty_retrieved_context(value):
+    """Return whether a serialized inference trace contains an empty docs payload."""
+    if isinstance(value, dict):
+        if "docs" in value:
+            docs = value["docs"]
+            if docs is None or (hasattr(docs, "__len__") and len(docs) == 0):
+                return True
+        return any(_has_empty_retrieved_context(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_empty_retrieved_context(item) for item in value)
+    return False
+
+
 def main():
     args = get_args()
     logger.info(f"{args}")
@@ -199,7 +230,10 @@ def main():
     ems, f1s, precs, recalls = [], [], [], []
     retrieve_counts, generate_counts = [], []
     hallucinated_counts, token_counts, sentence_counts = [], [], []
-    latencies = []
+    retrieval_latencies, latencies = [], []
+    expected_sample_ids = _load_expected_sample_ids(args)
+    observed_qids, failed_qids = set(), set()
+    empty_context_count = 0
     
     need_generate = args.dataset in ['2wikimultihopqa', "hotpotqa", "iirc", "strategyqa"] 
     if args.method == "baseline-sft":
@@ -227,6 +261,11 @@ def main():
         rd = json.loads(line)
         qid = rd["qid"]
         pred = rd["prediction"]
+        observed_qids.add(qid)
+        if pred is None or pred is False:
+            failed_qids.add(qid)
+        if _has_empty_retrieved_context(pred):
+            empty_context_count += 1
         # 修复：仅当记录中不存在 retrieve_count 字段时，才根据包含 docs 的轨迹节点回退计算
         if "retrieve_count" not in rd:
             rd["retrieve_count"] = sum([1 for p in pred if isinstance(p, dict) and "docs" in p]) if pred is not None else 0
@@ -284,6 +323,7 @@ def main():
         hallucinated_counts.append(_as_int(rd.get("hallucinated_count")))
         token_counts.append(_as_int(rd.get("token_count")))
         sentence_counts.append(_as_int(rd.get("sentence_count")))
+        retrieval_latencies.append(_as_float(rd.get("retrieval_latency_sec")))
         latencies.append(_as_float(rd.get("latency_sec")))
         detail = {
             "qid": qid, 
@@ -306,6 +346,17 @@ def main():
     avg_hallucinated = _safe_mean(hallucinated_counts)
     avg_tokens = _safe_mean(token_counts)
     avg_sentence = _safe_mean(sentence_counts)
+    valid_retrieval_latencies = [latency for latency in retrieval_latencies if latency is not None]
+    avg_retrieval_latency = _safe_mean(valid_retrieval_latencies)
+    p50_retrieval_latency = _safe_percentile(valid_retrieval_latencies, 50)
+    p95_retrieval_latency = _safe_percentile(valid_retrieval_latencies, 95)
+
+    if expected_sample_ids is None:
+        expected_sample_ids = list(observed_qids)
+    expected_qids = set(expected_sample_ids)
+    missing_output_count = len(expected_qids - observed_qids)
+    failed_count = len(expected_qids & failed_qids)
+    success_count = len(expected_qids & observed_qids) - failed_count
     
     # 检索率：retrieve_count > 0 与 == 0 的样本比例
     if num_samples > 0:
@@ -340,6 +391,9 @@ def main():
         ["token_count", avg_tokens],
         ["sentence_count", avg_sentence],
         ["avg_retrieve_count", avg_retrieve],
+        ["avg_retrieval_latency_sec", avg_retrieval_latency],
+        ["p50_retrieval_latency_sec", p50_retrieval_latency],
+        ["p95_retrieval_latency_sec", p95_retrieval_latency],
         ["retrieval_rate", retrieval_rate],
         ["zero_retrieval_rate", zero_retrieval_rate],
         ["avg_latency_sec", avg_latency],
@@ -348,6 +402,10 @@ def main():
         ["avg_generate_count", avg_generate],
         ["avg_output_tokens", avg_tokens],
         ["throughput_qps", throughput_qps],
+        ["success_count", success_count],
+        ["failure_count", failed_count],
+        ["missing_output_count", missing_output_count],
+        ["empty_context_count", empty_context_count],
     ]
     df = pd.DataFrame(rows)
     print(df)
@@ -370,6 +428,9 @@ def main():
         "Precision": prec_mean,
         "Recall": recall_mean,
         "avg_retrieve_count": avg_retrieve,
+        "avg_retrieval_latency_sec": avg_retrieval_latency,
+        "p50_retrieval_latency_sec": p50_retrieval_latency,
+        "p95_retrieval_latency_sec": p95_retrieval_latency,
         "retrieval_rate": retrieval_rate,
         "zero_retrieval_rate": zero_retrieval_rate,
         "avg_latency_sec": avg_latency,
@@ -380,6 +441,10 @@ def main():
         "throughput_qps": throughput_qps,
         "avg_sentence_count": avg_sentence,
         "avg_hallucinated_count": avg_hallucinated,
+        "success_count": success_count,
+        "failure_count": failed_count,
+        "missing_output_count": missing_output_count,
+        "empty_context_count": empty_context_count,
     }
     with open(f"{args.output_dir}/metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2, ensure_ascii=False)

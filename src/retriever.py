@@ -33,6 +33,86 @@ def get_random_doc_id():
 import os
 ES_HOST = os.getenv("ES_HOST", "localhost")
 
+
+class HyperGraphHTTPRetrieverError(RuntimeError):
+    """Raised when the HyperGraph HTTP retrieval service cannot supply context."""
+
+
+class HyperGraphHTTPRetriever:
+    """HTTP-only adapter for HyperGraphRAG context retrieval without BM25 fallback."""
+
+    def __init__(self, endpoint, timeout=300, topk=10,
+                 max_token_for_text_unit=2000,
+                 max_token_for_local_context=1000,
+                 max_token_for_global_context=1000,
+                 max_retries=2, session=None):
+        import requests
+
+        self.endpoint = endpoint.rstrip("/")
+        self.timeout = timeout
+        self.topk = topk
+        self.max_token_for_text_unit = max_token_for_text_unit
+        self.max_token_for_local_context = max_token_for_local_context
+        self.max_token_for_global_context = max_token_for_global_context
+        self.max_retries = max_retries
+        self._requests = requests
+        self.session = session or requests.Session()
+
+    def _payload(self, query):
+        return {
+            "query": query,
+            "top_k": self.topk,
+            "max_token_for_text_unit": self.max_token_for_text_unit,
+            "max_token_for_local_context": self.max_token_for_local_context,
+            "max_token_for_global_context": self.max_token_for_global_context,
+        }
+
+    def _error(self, message, status=None):
+        suffix = "" if status is None else " (HTTP {})".format(status)
+        return HyperGraphHTTPRetrieverError(
+            "HyperGraph retrieval failed at {}{}: {}".format(
+                self.endpoint, suffix, message))
+
+    def _retrieve_one(self, query):
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("HyperGraph query must be a non-empty string")
+        last_error = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = self.session.post(self.endpoint + "/retrieve",
+                                             json=self._payload(query), timeout=self.timeout)
+            except self._requests.RequestException as exc:
+                last_error = self._error("connection or read error: {}".format(
+                    exc.__class__.__name__))
+                if attempt < self.max_retries:
+                    continue
+                raise last_error from exc
+            if 400 <= response.status_code < 500:
+                raise self._error("client error", response.status_code)
+            if response.status_code >= 500:
+                last_error = self._error("temporary server error", response.status_code)
+                if attempt < self.max_retries:
+                    continue
+                raise last_error
+            if response.status_code < 200 or response.status_code >= 300:
+                raise self._error("unexpected response", response.status_code)
+            try:
+                body = response.json()
+            except ValueError as exc:
+                raise self._error("invalid JSON response", response.status_code) from exc
+            context = body.get("context") if isinstance(body, dict) else None
+            if not isinstance(context, str) or not context.strip():
+                raise self._error("empty context", response.status_code)
+            return context
+        raise last_error
+
+    def retrieve(self, queries: List[str], topk=None, max_query_length=None):
+        """Return one complete HyperGraph context evidence block per query."""
+        docs = [self._retrieve_one(query) for query in queries]
+        docids = ["hypergraph-{}".format(index) for index in range(len(docs))]
+        return (np.array(docids, dtype=object).reshape(len(docs), 1),
+                np.array(docs, dtype=object).reshape(len(docs), 1))
+
 class BM25:
     def __init__(
         self,
