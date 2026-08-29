@@ -11,8 +11,12 @@ $hypergraphUrl = "http://127.0.0.1:8765"
 if (-not (Test-Path $pythonExe)) { throw "Python virtual environment not found: $pythonExe" }
 if (-not (Test-Path $sampleIdsFile)) { throw "Fixed CRAG sample manifest not found: $sampleIdsFile" }
 $health = Invoke-RestMethod -Uri "$hypergraphUrl/health" -Method Get -TimeoutSec 10
-if ($health.status -ne "ok" -or -not $health.ready -or $health.backend -ne "hypergraph") {
-    throw "HyperGraph service is not ready"
+if ($health.status -ne "ok" -or -not $health.ready -or $health.backend -ne "hypergraph" -or
+    $health.mode -ne "hybrid" -or $health.only_need_context -ne $true -or
+    $health.embedding_dimension -ne 1536 -or $health.max_concurrency -ne 1 -or
+    $health.default_top_k -ne 10 -or $health.default_max_token_for_text_unit -ne 2000 -or
+    $health.default_max_token_for_local_context -ne 1000 -or $health.default_max_token_for_global_context -ne 1000) {
+    throw "HyperGraph service is not ready or does not match the frozen smoke configuration"
 }
 
 $env:PYTHONUTF8 = "1"

@@ -46,7 +46,16 @@ class HyperGraphServiceTests(AioHTTPTestCase):
     async def test_health(self):
         response = await self.client.get("/health")
         self.assertEqual(response.status, 200)
-        self.assertEqual((await response.json())["backend"], "hypergraph")
+        body = await response.json()
+        self.assertEqual(body["backend"], "hypergraph")
+        self.assertEqual(body["mode"], "hybrid")
+        self.assertTrue(body["only_need_context"])
+        self.assertEqual(body["embedding_dimension"], 1536)
+        self.assertEqual(body["max_concurrency"], 1)
+        self.assertEqual(body["default_top_k"], 10)
+        self.assertEqual(body["default_max_token_for_text_unit"], 2000)
+        self.assertEqual(body["default_max_token_for_local_context"], 1000)
+        self.assertEqual(body["default_max_token_for_global_context"], 1000)
 
     @unittest_run_loop
     async def test_retrieve_returns_context_not_answer(self):

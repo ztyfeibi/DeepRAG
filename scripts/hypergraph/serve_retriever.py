@@ -11,6 +11,13 @@ from aiohttp import web
 
 logger = logging.getLogger(__name__)
 
+RETRIEVAL_MODE = "hybrid"
+ONLY_NEED_CONTEXT = True
+DEFAULT_TOP_K = 10
+DEFAULT_MAX_TOKEN_FOR_TEXT_UNIT = 2000
+DEFAULT_MAX_TOKEN_FOR_LOCAL_CONTEXT = 1000
+DEFAULT_MAX_TOKEN_FOR_GLOBAL_CONTEXT = 1000
+
 
 def _error(status, message):
     return web.json_response({"status": "error", "error": message}, status=status)
@@ -25,12 +32,15 @@ def _positive_int(payload, name, default):
 
 def _query_options(payload):
     return {
-        "mode": "hybrid",
-        "only_need_context": True,
-        "top_k": _positive_int(payload, "top_k", 10),
-        "max_token_for_text_unit": _positive_int(payload, "max_token_for_text_unit", 2000),
-        "max_token_for_local_context": _positive_int(payload, "max_token_for_local_context", 1000),
-        "max_token_for_global_context": _positive_int(payload, "max_token_for_global_context", 1000),
+        "mode": RETRIEVAL_MODE,
+        "only_need_context": ONLY_NEED_CONTEXT,
+        "top_k": _positive_int(payload, "top_k", DEFAULT_TOP_K),
+        "max_token_for_text_unit": _positive_int(
+            payload, "max_token_for_text_unit", DEFAULT_MAX_TOKEN_FOR_TEXT_UNIT),
+        "max_token_for_local_context": _positive_int(
+            payload, "max_token_for_local_context", DEFAULT_MAX_TOKEN_FOR_LOCAL_CONTEXT),
+        "max_token_for_global_context": _positive_int(
+            payload, "max_token_for_global_context", DEFAULT_MAX_TOKEN_FOR_GLOBAL_CONTEXT),
     }
 
 
@@ -44,7 +54,14 @@ def create_app(rag, query_param_factory, max_concurrency=1, embedding_dimension=
     async def health(_request):
         return web.json_response({
             "status": "ok", "ready": True, "backend": "hypergraph",
-            "mode": "hybrid", "embedding_dimension": embedding_dimension,
+            "mode": RETRIEVAL_MODE,
+            "only_need_context": ONLY_NEED_CONTEXT,
+            "embedding_dimension": embedding_dimension,
+            "max_concurrency": max_concurrency,
+            "default_top_k": DEFAULT_TOP_K,
+            "default_max_token_for_text_unit": DEFAULT_MAX_TOKEN_FOR_TEXT_UNIT,
+            "default_max_token_for_local_context": DEFAULT_MAX_TOKEN_FOR_LOCAL_CONTEXT,
+            "default_max_token_for_global_context": DEFAULT_MAX_TOKEN_FOR_GLOBAL_CONTEXT,
         })
 
     async def retrieve(request):
@@ -68,9 +85,9 @@ def create_app(rag, query_param_factory, max_concurrency=1, embedding_dimension=
         if not isinstance(context, str) or not context.strip():
             return _error(503, "HyperGraph returned empty context")
         return web.json_response({
-            "status": "ok", "backend": "hypergraph", "mode": "hybrid",
+            "status": "ok", "backend": "hypergraph", "mode": RETRIEVAL_MODE,
             "context": context, "latency_sec": time.perf_counter() - started,
-            "top_k": getattr(params, "top_k", payload.get("top_k", 10)),
+            "top_k": getattr(params, "top_k", payload.get("top_k", DEFAULT_TOP_K)),
         })
 
     app.router.add_get("/health", health)

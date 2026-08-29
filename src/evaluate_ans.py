@@ -198,6 +198,22 @@ def _has_empty_retrieved_context(value):
     return False
 
 
+def _retrieval_events(record):
+    """Return v2 retrieval events, or an empty list for a legacy record."""
+    events = record.get("retrieval_events")
+    if not isinstance(events, list):
+        return []
+    return [event for event in events if isinstance(event, dict)]
+
+
+def _event_has_empty_context(event):
+    """Identify a successful event whose backend returned zero context blocks."""
+    if event.get("status") != "success":
+        return False
+    block_count = _as_int(event.get("context_block_count"))
+    return block_count == 0
+
+
 def main():
     args = get_args()
     logger.info(f"{args}")
@@ -231,9 +247,14 @@ def main():
     retrieve_counts, generate_counts = [], []
     hallucinated_counts, token_counts, sentence_counts = [], [], []
     retrieval_latencies, latencies = [], []
+    retrieval_event_latencies = []
+    retrieval_event_count = 0
+    successful_retrieval_event_count = 0
+    failed_retrieval_event_count = 0
     expected_sample_ids = _load_expected_sample_ids(args)
     observed_qids, failed_qids = set(), set()
     empty_context_count = 0
+    empty_context_event_count = 0
     
     need_generate = args.dataset in ['2wikimultihopqa', "hotpotqa", "iirc", "strategyqa"] 
     if args.method == "baseline-sft":
@@ -262,9 +283,27 @@ def main():
         qid = rd["qid"]
         pred = rd["prediction"]
         observed_qids.add(qid)
-        if pred is None or pred is False:
+        if rd.get("status") == "failure" or (
+            "status" not in rd and (pred is None or pred is False)
+        ):
             failed_qids.add(qid)
-        if _has_empty_retrieved_context(pred):
+        events = _retrieval_events(rd)
+        if "retrieval_events" in rd:
+            retrieval_event_count += len(events)
+            event_has_empty_context = False
+            for event in events:
+                event_latency = _as_float(event.get("latency_sec"))
+                retrieval_event_latencies.append(event_latency)
+                if event.get("status") == "success":
+                    successful_retrieval_event_count += 1
+                elif event.get("status") == "failure":
+                    failed_retrieval_event_count += 1
+                if _event_has_empty_context(event):
+                    empty_context_event_count += 1
+                    event_has_empty_context = True
+            if event_has_empty_context:
+                empty_context_count += 1
+        elif _has_empty_retrieved_context(pred):
             empty_context_count += 1
         # 修复：仅当记录中不存在 retrieve_count 字段时，才根据包含 docs 的轨迹节点回退计算
         if "retrieve_count" not in rd:
@@ -350,6 +389,12 @@ def main():
     avg_retrieval_latency = _safe_mean(valid_retrieval_latencies)
     p50_retrieval_latency = _safe_percentile(valid_retrieval_latencies, 50)
     p95_retrieval_latency = _safe_percentile(valid_retrieval_latencies, 95)
+    valid_retrieval_event_latencies = [
+        latency for latency in retrieval_event_latencies if latency is not None
+    ]
+    avg_retrieval_event_latency = _safe_mean(valid_retrieval_event_latencies)
+    p50_retrieval_event_latency = _safe_percentile(valid_retrieval_event_latencies, 50)
+    p95_retrieval_event_latency = _safe_percentile(valid_retrieval_event_latencies, 95)
 
     if expected_sample_ids is None:
         expected_sample_ids = list(observed_qids)
@@ -394,6 +439,12 @@ def main():
         ["avg_retrieval_latency_sec", avg_retrieval_latency],
         ["p50_retrieval_latency_sec", p50_retrieval_latency],
         ["p95_retrieval_latency_sec", p95_retrieval_latency],
+        ["retrieval_event_count", retrieval_event_count],
+        ["successful_retrieval_event_count", successful_retrieval_event_count],
+        ["failed_retrieval_event_count", failed_retrieval_event_count],
+        ["avg_retrieval_event_latency_sec", avg_retrieval_event_latency],
+        ["p50_retrieval_event_latency_sec", p50_retrieval_event_latency],
+        ["p95_retrieval_event_latency_sec", p95_retrieval_event_latency],
         ["retrieval_rate", retrieval_rate],
         ["zero_retrieval_rate", zero_retrieval_rate],
         ["avg_latency_sec", avg_latency],
@@ -406,6 +457,7 @@ def main():
         ["failure_count", failed_count],
         ["missing_output_count", missing_output_count],
         ["empty_context_count", empty_context_count],
+        ["empty_context_event_count", empty_context_event_count],
     ]
     df = pd.DataFrame(rows)
     print(df)
@@ -431,6 +483,12 @@ def main():
         "avg_retrieval_latency_sec": avg_retrieval_latency,
         "p50_retrieval_latency_sec": p50_retrieval_latency,
         "p95_retrieval_latency_sec": p95_retrieval_latency,
+        "retrieval_event_count": retrieval_event_count,
+        "successful_retrieval_event_count": successful_retrieval_event_count,
+        "failed_retrieval_event_count": failed_retrieval_event_count,
+        "avg_retrieval_event_latency_sec": avg_retrieval_event_latency,
+        "p50_retrieval_event_latency_sec": p50_retrieval_event_latency,
+        "p95_retrieval_event_latency_sec": p95_retrieval_event_latency,
         "retrieval_rate": retrieval_rate,
         "zero_retrieval_rate": zero_retrieval_rate,
         "avg_latency_sec": avg_latency,
@@ -445,6 +503,7 @@ def main():
         "failure_count": failed_count,
         "missing_output_count": missing_output_count,
         "empty_context_count": empty_context_count,
+        "empty_context_event_count": empty_context_event_count,
     }
     with open(f"{args.output_dir}/metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2, ensure_ascii=False)

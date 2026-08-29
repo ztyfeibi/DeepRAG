@@ -47,6 +47,10 @@ def get_args():
     parser.add_argument("--query_formulation", type=str, default="direct")
     parser.add_argument("--check_real_words", type=bool, default=False)
     args = parser.parse_args()
+    # HyperGraph service-side settings are fixed and recorded with each client run.
+    args.hypergraph_mode = "hybrid"
+    args.hypergraph_only_need_context = True
+    args.hypergraph_service_max_concurrency = 1
     args.use_counter = True
     return args
 
